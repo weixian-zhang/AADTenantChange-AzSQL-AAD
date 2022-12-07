@@ -1,5 +1,6 @@
 
-
+SELECT name FROM master.sys.databases
+where name <> 'master'
 
 -- check database role assignment
 SELECT    roles.principal_id                            AS RolePrincipalID

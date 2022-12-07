@@ -1,3 +1,7 @@
+# https://learn.microsoft.com/en-us/azure/azure-sql/database/authentication-aad-configure?view=azuresql&tabs=azure-powershell
+
+$ProgressPreference = "SilentlyContinue"
+Install-Module -Name AzureADPreview 
 # this script is using SPN in TechPass to perform "Set admin" at Azure SQL server-level
 
 try
@@ -7,6 +11,7 @@ try
     $techpass_techpass_tenant_id = (Get-ChildItem env:azsqlaadm_techpass_tenant_id).Value
     $techpass_spn_secret = (Get-ChildItem env:azsqlaadm_spn_secret).Value
     $techpass_sqladmin_username = (Get-ChildItem env:azsqlaadm_techpass_sqladmin_username).Value
+    $techpass_sqladmin_objectid = (Get-ChildItem env:azsqlaadm_techpass_sqladmin_objectid).Value
     $sql_server_name = (Get-ChildItem env:azsqlaadm_sqlserver_name).Value
     $sql_server_resourcegroup = (Get-ChildItem env:azsqlaadm_rg).Value
 }
@@ -26,8 +31,10 @@ $azcredSPN = New-Object System.Management.Automation.PSCredential $techpass_SPNA
 Connect-AzAccount -ServicePrincipal -Credential $azcredSPN -Tenant $tenantId
 
 # set AAD admin
+
 Set-AzSqlServerActiveDirectoryAdministrator -ResourceGroupName $sql_server_resourcegroup `
 -ServerName $sql_server_name `
+-ObjectId $techpass_sqladmin_objectid `
 -DisplayName $techpass_sqladmin_username
 
 
