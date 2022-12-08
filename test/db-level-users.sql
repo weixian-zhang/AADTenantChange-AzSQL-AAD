@@ -1,8 +1,15 @@
+CREATE USER [db-level-user-3@azworkbench.onmicrosoft.com] FROM EXTERNAL PROVIDER -- user exist already just for setting up to test only
 
-SELECT name FROM master.sys.databases
-where name <> 'master'
+ALTER ROLE [db_owner] ADD MEMBER [db-level-user-2@azworkbench.onmicrosoft.com]
 
--- check database role assignment
+ALTER ROLE [db_datawriter] ADD MEMBER [db-level-user-3@azworkbench.onmicrosoft.com]
+ALTER ROLE [db_datareader] ADD MEMBER [db-level-user-3@azworkbench.onmicrosoft.com]
+
+
+-- grant permissions
+GRANT CONNECT to [db-level-user-3@azworkbench.onmicrosoft.com]
+
+
 SELECT    roles.principal_id                            AS RolePrincipalID
 	,    roles.name                                    AS RolePrincipalName
 	,    database_role_members.member_principal_id    AS MemberPrincipalID
@@ -25,19 +32,3 @@ LEFT JOIN (SELECT
 		FROM sys.database_permissions) perms
 	ON perms.[AADUser] = members.name
 WHERE members.type_desc like 'external%'
-GO
-
-
--- base on above result, loop-thru to run below queries for each result
-
-CREATE USER [db-level-user-1@azworkbench.onmicrosoft.com] FROM EXTERNAL PROVIDER -- user exist already just for setting up to test only
-
-ALTER ROLE [db_owner] ADD MEMBER [db-level-user-1@azworkbench.onmicrosoft.com] 
-
--- grant permissions
-GRANT alter [control] user to [db-level-user-1@azworkbench.onmicrosoft.com]
-
-
-
-
-

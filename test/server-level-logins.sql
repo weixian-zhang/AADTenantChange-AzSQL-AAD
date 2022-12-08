@@ -12,6 +12,18 @@ WHERE type_desc like 'external%'
 
 	-- create server level login
 	Use master
+	CREATE LOGIN [aad-group-server-level-1] FROM EXTERNAL PROVIDER
+	GO
+
+	--assign server level role from above select statement
+	ALTER SERVER ROLE ##MS_ServerStateReader##
+	ADD MEMBER [aad-group-server-level-1];  
+	GO
+
+
+	-- create server-log for AAD Group
+	-- create server level login
+	Use master
 	CREATE LOGIN [server-level-login-2@azworkbench.onmicrosoft.com] FROM EXTERNAL PROVIDER
 	GO
 
@@ -19,6 +31,8 @@ WHERE type_desc like 'external%'
 	ALTER SERVER ROLE ##MS_ServerStateReader##
 	ADD MEMBER [server-level-login-2@azworkbench.onmicrosoft.com];  
 	GO
+
+
 
 
 

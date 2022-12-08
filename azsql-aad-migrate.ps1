@@ -1,7 +1,6 @@
 # https://learn.microsoft.com/en-us/azure/azure-sql/database/authentication-aad-configure?view=azuresql&tabs=azure-powershell
 
-$ProgressPreference = "SilentlyContinue"
-Install-Module -Name AzureADPreview 
+
 # this script is using SPN in TechPass to perform "Set admin" at Azure SQL server-level
 
 try
@@ -17,20 +16,18 @@ try
 }
 catch
 {
-    Write-Output "Something threw an exception"
+    Error "Something threw an exception"
   
 }
-
-
 
 $tenantId = $techpass_techpass_tenant_id
 $secPassword = ConvertTo-SecureString -AsPlainText -Force -String $techpass_spn_secret
 $azcredSPN = New-Object System.Management.Automation.PSCredential $techpass_SPNAppId, $secPassword
 
 # login to Azure techpass tenant
+Info "authenticating to AAD"
 Connect-AzAccount -ServicePrincipal -Credential $azcredSPN -Tenant $tenantId
-
-# set AAD admin
+Info "authenticated to AAD"
 
 Set-AzSqlServerActiveDirectoryAdministrator -ResourceGroupName $sql_server_resourcegroup `
 -ServerName $sql_server_name `
@@ -42,3 +39,13 @@ Set-AzSqlServerActiveDirectoryAdministrator -ResourceGroupName $sql_server_resou
 
 
 # migrate for db users
+
+
+
+
+Function Info($msg) {
+    Write-Host $msg -fore green
+}
+Function Error($msg) {
+    Write-Host $msg -fore red
+}
