@@ -92,6 +92,29 @@ Function Create_SQL_Connection($dbName, $userName, $passw) {
     return $conn
 }
 
+Function Get_Databases() {
+    try {
+        $dbTsql = "SELECT name FROM sys.databases"
+        $sqlConn.open()
+
+        $sqlCommand = $sqlConn.CreateCommand()
+        $sqlCommand.CommandText = $dbTsql
+
+        $dbNames = new-object System.Data.DataTable
+
+        $adapter = new-object System.Data.SqlClient.SqlDataAdapter($sqlCommand)
+
+        $adapter.Fill($dbNames)
+
+        $sqlConn.Close()
+
+        return ,$dbNames
+    }
+    catch {
+        Error "error when getting databases" "Get_Databases"
+    }
+    
+}
 
 #### helpers ####
 
@@ -115,14 +138,87 @@ Function Create_Server_Login($username) {
     
 }
 
-Function Process_AAD_Server_Logins() {
 
-    $tsql = "SELECT name, type_desc, type, is_disabled FROM sys.server_principals WHERE type_desc like 'external%'"
+
+#### process db users with server logins ####
+
+Function Get_Server_Logins() {
+    $tsql = @"
+select name, sid, type_desc from sys.server_principals
+WHERE type_desc like 'external%'
+"@
+
+    $conn = Create_SQL_Connection "master" $aad_sqladmin_username $aad_sqladmin_password
+
+    $conn.Open()
+
+    $sqlCommand = $conn.CreateCommand()
+    $sqlCommand.CommandText = $tsql
+
+    $datatable = new-object System.Data.DataTable
+
+    $adapter = new-object System.Data.SqlClient.SqlDataAdapter($sqlCommand)
+
+    $adapter.Fill($datatable)
+
+    $conn.Close()
+
+    return ,$datatable
+}
+
+Function Recreate_Server_Logins() {
+
+    $serverLogins = Get_Server_Logins
+
+    foreach($row in $serverLogins) {
+
+        # create server logins
+
+    }
+
+}
+
+Function Process_DB_Users_That_Maps_To_Server_Logins() {
+
+    Recreate_Server_Logins
 
     try {
-        $conn = Create_SQL_Connection "master" $aad_sqladmin_username $aad_sqladmin_password
 
-        $conn.open()
+        $dbs = Get_Databases
+
+        foreach($row in $dbs.Rows) {
+            $dbName = $row[0]
+            
+            $dbUsersServerLogins = Get_DB_Users_With_Server_Logins $dbName
+
+            foreach($row in $dbUsersServerLogins) {
+
+                $name = $row[0]
+                $type_desc = $row[1]
+                $sid = $row[2]
+                $SIDWithoutAADE = $row[3]
+                $AADExternalLogin = $row[4]
+
+                $ Find_Server_Logins_By_DB_User_SID $SIDWithoutAADE
+
+            }
+        }
+    }
+    catch {
+        Error "" "Process_DB_Users_That_Maps_To_Server_Logins"
+    }
+}
+
+Function Find_Server_Logins_By_DB_User_SID($sid) {
+
+    $tsql = @"
+    select name, sid, type_desc from sys.server_principals
+    WHERE type_desc like 'external%' and sid = $sid
+"@
+
+    try {
+
+        $conn = Create_SQL_Connection "master" $aad_sqladmin_username $aad_sqladmin_password
 
         $sqlCommand = $conn.CreateCommand()
         $sqlCommand.CommandText = $tsql
@@ -133,45 +229,54 @@ Function Process_AAD_Server_Logins() {
 
         $adapter.Fill($datatable)
 
-        $sqlConn.Close()
-
-        foreach($row in $datatable.Rows) {
-            $name = $row[0]
-            $typeDesc = $row[1]
-            $type = $row[2]
-            $is_disabled = $row[3]
-        }
-    }
-    catch {
-       Error "error at getting server logins" "Get_AAD_Server_Logins"
-    }
-}
-
-
-
-Function Get_Databases() {
-    try {
-        $dbTsql = "SELECT name FROM sys.databases where name <> 'master'"
-        $sqlConn.open()
-
-        $sqlCommand = $sqlConn.CreateCommand()
-        $sqlCommand.CommandText = $dbTsql
-
-        $dbNames = new-object System.Data.DataTable
-
-        $adapter = new-object System.Data.SqlClient.SqlDataAdapter($sqlCommand)
-
-        $adapter.Fill($dbNames)
-
-        $sqlConn.Close()
-
-        return ,$dbNames
+        $conn.Close()
+        
+        return ,$datatable
     }
     catch {
         Error "error when getting databases" "Get_Databases"
     }
-    
 }
+
+Function Get_DB_Users_With_Server_Logins($dbName) {
+    $tsql = @"
+    SELECT * FROM
+    (
+        SELECT name, type_desc, sid, 
+        LEFT(CONVERT(NVARCHAR(1000), sid, 2), LEN(CONVERT(NVARCHAR(1000), sid, 2))- 4 ) as SIDWithoutAADE, 
+        RIGHT(CONVERT(NVARCHAR(1000), sid, 2), 4) as AADExternalLogin
+        FROM sys.database_principals 
+        WHERE type_desc like 'external%'
+    ) t
+    WHERE t.AADExternalLogin = 'AADE'
+"@
+
+    try {
+
+        $conn = Create_SQL_Connection $dbName $aad_sqladmin_username $aad_sqladmin_password
+
+        $sqlCommand = $conn.CreateCommand()
+        $sqlCommand.CommandText = $tsql
+
+        $datatable = new-object System.Data.DataTable
+
+        $adapter = new-object System.Data.SqlClient.SqlDataAdapter($sqlCommand)
+
+        $adapter.Fill($datatable)
+
+        $conn.Close()
+        
+        return ,$datatable
+    }
+    catch {
+        Error "error when getting databases" "Get_Databases"
+    }
+}
+
+#### process db users with server logins ####
+
+
+#### process db contained users
 
 Function Get_DB_Users_Roles_Permissions($dbName) {
     $userRPTSQL = @"
@@ -217,7 +322,6 @@ WHERE members.type_desc like 'external%' and members.name not in ('dbo')
     catch {
         Error "error when getting databases" "Get_Databases"
     }
-    
 }
 
 Function Recreate_DB_User_As_External_Provider($dbname, $userName) {
@@ -228,16 +332,6 @@ Function Recreate_DB_User_As_External_Provider($dbname, $userName) {
 
        CREATE USER [$userName] FROM EXTERNAL PROVIDER
 "@
-
-#         $tsql = @"
-        
-#         IF NOT EXISTS (SELECT [name]
-#         FROM [sys].[database_principals]
-#         WHERE type_desc like 'external%' AND [name] = '$userName')
-#         Begin
-#             CREATE USER [$userName] FROM EXTERNAL PROVIDER
-#         end
-# "@
 
         $conn = Create_SQL_Connection $dbName $aad_sqladmin_username $aad_sqladmin_password
 
@@ -309,7 +403,7 @@ Function Grant_DB_User_Permissions($dbname, $permission, $userName) {
     }
 }
 
-Function Process_Database_Users() {
+Function Process_Remap_Database_Users_To_AAD_Identity() {
 
     try {
 
@@ -338,8 +432,6 @@ Function Process_Database_Users() {
         $errMsg = $Error[0]
         Error "error when processing db users, $errMsg" "Process_Database_Users"
     }
-
-    
 }
 
 
@@ -350,7 +442,9 @@ Test-SQLConnection "master" $aad_sqladmin_username $aad_sqladmin_password
 Info "Azure AD SQL Admin $aad_sqladmin_username is able to connect to DB server $sql_server_name"
 # Process_AAD_Server_Logins
 
-Process_Database_Users
+#Process_Remap_Database_Users_To_AAD_Identity
+
+Process_DB_Users_That_Maps_To_Server_Logins
 
 Info @"
 Completed

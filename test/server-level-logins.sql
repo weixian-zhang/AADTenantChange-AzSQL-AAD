@@ -2,11 +2,18 @@
 --DECLARE @serverlogin INT;
 --var user = [server-level-login-1@azworkbench.onmicrosoft.com]
 
-SELECT name, type_desc, type, sid, 
-LEFT(CONVERT(NVARCHAR(1000), sid, 2), LEN(CONVERT(NVARCHAR(1000), sid, 2))- 4 ), 
-RIGHT(CONVERT(NVARCHAR(1000), sid, 2), 4) as AADExternalLogin
-FROM sys.database_principals 
-WHERE type_desc like 'external%' --AADE means this user is mapped to an AAD based server-login
+SELECT * FROM
+(
+	SELECT name, type_desc, type, sid, 
+	LEFT(CONVERT(NVARCHAR(1000), sid, 2), LEN(CONVERT(NVARCHAR(1000), sid, 2))- 4 ) as SIDWithoutAADE, 
+	RIGHT(CONVERT(NVARCHAR(1000), sid, 2), 4) as AADExternalLogin
+	FROM sys.database_principals 
+	WHERE type_desc like 'external%'
+) t
+WHERE t.AADExternalLogin = 'AADE' -- AADE means this user is mapped to an AAD based server-login object
+
+select name, sid, type_desc from sys.server_principals
+WHERE type_desc like 'external%' and sid = <sid>	-- get server login that map to db user
 
 
 
