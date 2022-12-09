@@ -20,9 +20,15 @@
 # }
 
 
+
+#### helpers ####
+
 Function SetupPrequisites() {
 
+
     try {
+        
+
         #$global:techpass_techpass_tenant_id = (Get-ChildItem env:azsqlaadm_techpass_tenant_id).Value
         $global:aad_sqladmin_username = (Get-ChildItem env:azsqlaadm_aad_sqladmin_username).Value
         $global:aad_sqladmin_password = (Get-ChildItem env:azsqlaadm_aad_sqladmin_password).Value
@@ -37,21 +43,24 @@ Function SetupPrequisites() {
         # Connect-AzAccount -Credential $azcred -Tenant $techpass_techpass_tenant_id
         # $global:accesstoken = Get-AzAccessToken
 
-        $global:sqlConn = new-object System.Data.SqlClient.SqlConnection("Data Source=$sql_server_name; Authentication=Active Directory Password; Initial Catalog=master;  UID=$aad_sqladmin_username; PWD=$aad_sqladmin_password")
+        #$global:sqlConn = new-object System.Data.SqlClient.SqlConnection("Data Source=$sql_server_name; Authentication=Active Directory Password; Initial Catalog=master;  UID=$aad_sqladmin_username; PWD=$aad_sqladmin_password")
         #$global:sqlConn.AccessToken = $accesstoken.Token
     
     }
     catch {
-        $errMsg = $Error[0]
-        Error "error at setting up prerequisites, $errMsg" "SetupPrequisites"
-     }
+        Error "error at setting up prerequisites" "SetupPrequisites"
+        exit
+    }
 }
 
 Function Info($msg) {
     Write-Host $msg -fore green
 }
 Function Error($msg, $source) {
-    Write-Host "($source): $msg" -fore red
+    foreach($e in $Error){
+        Write-Host "($source): $msg - {$e}" -fore red
+    }
+    
 }
 
 Function IsNullOrEmptyStr($str) {
@@ -63,19 +72,29 @@ Function IsNullOrEmptyStr($str) {
     }
 }
 
-Function Test-SQLConnection
+Function Test-SQLConnection($dbName, $userName, $passw)
 {    
     try
     {
-        $sqlConn.Open();
-        $sqlConn.Close();
+        $conn = Create_SQL_Connection $dbName $userName $passw
+        $conn.Open();
+        $conn.Close();
     }
     catch
     {
-        Error "test sql connection failed on sql server: $sql_server_name"
+        Error "test sql connection failed on sql server: $sql_server_name and username $userName" "Test-SQLConnection"
         exit
     }
 }
+
+Function Create_SQL_Connection($dbName, $userName, $passw) {
+    $conn = new-object System.Data.SqlClient.SqlConnection("Data Source=$sql_server_name; Authentication=Active Directory Password; Initial Catalog=$dbName;  UID=$userName; PWD=$passw")
+    return $conn
+}
+
+
+#### helpers ####
+
 
 Function Create_Server_Login($username) {
 
@@ -87,6 +106,8 @@ Function Create_Server_Login($username) {
         $sqlConn.open()
 
         $sqlCmd.ExecuteNonQuery()
+
+        $sqlConn.Close()
     }
     catch {
         Error "error when creating server logins" "Create_Server_Login"
@@ -99,9 +120,11 @@ Function Process_AAD_Server_Logins() {
     $tsql = "SELECT name, type_desc, type, is_disabled FROM sys.server_principals WHERE type_desc like 'external%'"
 
     try {
-        $sqlConn.open()
+        $conn = Create_SQL_Connection "master" $aad_sqladmin_username $aad_sqladmin_password
 
-        $sqlCommand = $sqlConn.CreateCommand()
+        $conn.open()
+
+        $sqlCommand = $conn.CreateCommand()
         $sqlCommand.CommandText = $tsql
 
         $datatable = new-object System.Data.DataTable
@@ -120,18 +143,43 @@ Function Process_AAD_Server_Logins() {
         }
     }
     catch {
-       $errMsg = $Error[0]
-       Error "error at getting server logins, $errMsg" "Get_AAD_Server_Logins"
+       Error "error at getting server logins" "Get_AAD_Server_Logins"
     }
+}
+
+
+
+Function Get_Databases() {
+    try {
+        $dbTsql = "SELECT name FROM sys.databases where name <> 'master'"
+        $sqlConn.open()
+
+        $sqlCommand = $sqlConn.CreateCommand()
+        $sqlCommand.CommandText = $dbTsql
+
+        $dbNames = new-object System.Data.DataTable
+
+        $adapter = new-object System.Data.SqlClient.SqlDataAdapter($sqlCommand)
+
+        $adapter.Fill($dbNames)
+
+        $sqlConn.Close()
+
+        return ,$dbNames
+    }
+    catch {
+        Error "error when getting databases" "Get_Databases"
+    }
+    
 }
 
 Function Get_DB_Users_Roles_Permissions($dbName) {
     $userRPTSQL = @"
     SELECT    
-	    roles.name                                    AS [Role]
-	,    members.name                                AS UserPrincipalName
-	, perms.permission_name							 AS [Permissions]
-	, members.type_desc                             AS MemberType
+	    roles.name                AS [Role]
+	,   members.name              AS UserPrincipalName
+	,   perms.permission_name     AS [Permissions]
+	,   members.type_desc         AS MemberType
 FROM sys.database_role_members AS database_role_members
 JOIN sys.database_principals AS roles  
 	ON database_role_members.role_principal_id = roles.principal_id  
@@ -147,68 +195,168 @@ LEFT JOIN (SELECT
 		, state_desc
 		FROM sys.database_permissions) perms
 	ON perms.[AADUser] = members.name
-WHERE members.type_desc like 'external%'
+WHERE members.type_desc like 'external%' and members.name not in ('dbo')
 "@
-    $sqlConnection = new-object System.Data.SqlClient.SqlConnection("Data Source=$sql_server_name; Authentication=Active Directory Password; Initial Catalog=$dbName;  UID=$aad_sqladmin_username; PWD=$aad_sqladmin_password")
 
-    $sqlCommand = $sqlConnection.CreateCommand()
-    $sqlCommand.CommandText = $userRPTSQL
+    try {
+        $sqlConnection = Create_SQL_Connection $dbName $aad_sqladmin_username $aad_sqladmin_password #new-object System.Data.SqlClient.SqlConnection("Data Source=$sql_server_name; Authentication=Active Directory Password; Initial Catalog=$dbName;  UID=$aad_sqladmin_username; PWD=$aad_sqladmin_password")
 
-    $datatable = new-object System.Data.DataTable
+        $sqlCommand = $sqlConnection.CreateCommand()
+        $sqlCommand.CommandText = $userRPTSQL
 
-    $adapter = new-object System.Data.SqlClient.SqlDataAdapter($sqlCommand)
+        $datatable = new-object System.Data.DataTable
 
-    $adapter.Fill($datatable)
+        $adapter = new-object System.Data.SqlClient.SqlDataAdapter($sqlCommand)
 
-    $sqlConnection.Close()
+        $adapter.Fill($datatable)
+
+        $sqlConnection.Close()
+        
+        return ,$datatable
+    }
+    catch {
+        Error "error when getting databases" "Get_Databases"
+    }
     
-    return $datatable
 }
 
-Function Create_DB_User($dbname) {
+Function Recreate_DB_User_As_External_Provider($dbname, $userName) {
 
-    $sqlConn.ChangeDatabase($dbname)
+    try {
 
-    $tsql = "CREATE USER [db-level-user-3@azworkbench.onmicrosoft.com] FROM EXTERNAL PROVIDER"
+       $tsql = @"
+
+       CREATE USER [$userName] FROM EXTERNAL PROVIDER
+"@
+
+#         $tsql = @"
+        
+#         IF NOT EXISTS (SELECT [name]
+#         FROM [sys].[database_principals]
+#         WHERE type_desc like 'external%' AND [name] = '$userName')
+#         Begin
+#             CREATE USER [$userName] FROM EXTERNAL PROVIDER
+#         end
+# "@
+
+        $conn = Create_SQL_Connection $dbName $aad_sqladmin_username $aad_sqladmin_password
+
+        $cmd = $conn.CreateCommand()
+        $cmd.CommandText = $tsql
+        $paramUN = $cmd.Parameters.Add("@userName", [string]);
+        $paramUN.Value = $userName
+
+        $conn.Open()
+
+        $cmd.ExecuteNonQuery()
+        
+        $conn.CLose()
+
+    }
+    catch {
+        $errMsg = $Error[0]
+        Error "error when re-creating db contained user as external provider (AAD), $errMsg" "Recreate_DB_User_As_External_Provider"
+    }
+
+}
+
+Function Alter_Role_DB_User($dbname, $role, $userName) {
+
+    try {
+        $conn = Create_SQL_Connection $dbName $aad_sqladmin_username $aad_sqladmin_password
+
+        $tsql = @"
+    
+        ALTER ROLE [$role] ADD MEMBER [$userName]
+"@
+
+        $cmd = $conn.CreateCommand()
+        $cmd.CommandText = $tsql
+
+        $conn.Open()
+
+        $cmd.ExecuteNonQuery()
+
+        $conn.CLose()
+    }
+    catch {
+        $errMsg = $Error[0]
+        Error "error when re-creating db contained user as exterbal provider (AAD), $errMsg" "Recreate_DB_User_As_External_Provider"
+    }
+}
+
+Function Grant_DB_User_Permissions($dbname, $permission, $userName) {
+
+    try {
+        $conn = Create_SQL_Connection $dbName $aad_sqladmin_username $aad_sqladmin_password
+
+        $tsql = @"
+    
+        GRANT $permission to [$userName]
+"@
+
+        $cmd = $conn.CreateCommand()
+        $cmd.CommandText = $tsql
+
+        $conn.Open()
+
+        $cmd.ExecuteNonQuery()
+
+        $conn.CLose()
+    }
+    catch {
+        Error "error when re-creating db contained user as exterbal provider (AAD)" "Recreate_DB_User_As_External_Provider"
+    }
 }
 
 Function Process_Database_Users() {
 
-    $dbTsql = "SELECT name FROM sys.databases where name <> 'master'"
-    $sqlConn.open()
+    try {
 
-    $sqlCommand = $sqlConn.CreateCommand()
-    $sqlCommand.CommandText = $dbTsql
+        $dbs = Get_Databases
 
-    $dbNames = new-object System.Data.DataTable
-
-    $adapter = new-object System.Data.SqlClient.SqlDataAdapter($sqlCommand)
-
-    $adapter.Fill($dbNames)
-
-    $sqlConn.Close()
-
-    foreach($row in $dbNames.Rows) {
-        $dbName = $row[0]
-
-        $dbUsers = Get_DB_Users_Roles_Permissions($dbName)
-
-        foreach($row in $dbUsers.Rows) {
+        foreach($row in $dbs.Rows) {
             $dbName = $row[0]
+
+            $dbUsers = Get_DB_Users_Roles_Permissions($dbName)
+
+            foreach($row in $dbUsers.Rows) {
+                $role = $row[0]
+                $userName = $row[1]
+                $permission = $row[2]
+                $userType = $row[3]
+
+                Recreate_DB_User_As_External_Provider $dbName $userName
+
+                Alter_Role_DB_User $dbname $role $userName
+
+                Grant_DB_User_Permissions $dbname $permission $userName
+            }
         }
     }
+    catch {
+        $errMsg = $Error[0]
+        Error "error when processing db users, $errMsg" "Process_Database_Users"
+    }
+
+    
 }
 
 
 SetupPrequisites
 
-Test-SQLConnection
+Test-SQLConnection "master" $aad_sqladmin_username $aad_sqladmin_password
 
+Info "Azure AD SQL Admin $aad_sqladmin_username is able to connect to DB server $sql_server_name"
 # Process_AAD_Server_Logins
 
 Process_Database_Users
 
-
+Info @"
+Completed
+    -remapping of contained DB users to Server-Logins
+    -recreate contained DB users as Azure AD users
+"@
 
 # Info "authenticated to AAD"
 
