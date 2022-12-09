@@ -1,12 +1,16 @@
+
+--per database perform following
+
+-- create user
 CREATE USER [db-level-user-3@azworkbench.onmicrosoft.com] FROM EXTERNAL PROVIDER -- user exist already just for setting up to test only
 
+-- alter the roles
 ALTER ROLE [db_owner] ADD MEMBER [db-level-user-2@azworkbench.onmicrosoft.com]
-
 ALTER ROLE [db_datawriter] ADD MEMBER [db-level-user-3@azworkbench.onmicrosoft.com]
 ALTER ROLE [db_datareader] ADD MEMBER [db-level-user-3@azworkbench.onmicrosoft.com]
 
 
--- grant permissions
+-- grant back permissions
 GRANT CONNECT to [db-level-user-3@azworkbench.onmicrosoft.com]
 
 
