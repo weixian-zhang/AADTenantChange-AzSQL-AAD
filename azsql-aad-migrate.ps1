@@ -33,6 +33,13 @@ Function SetupPrequisites() {
         $global:aad_sqladmin_username = (Get-ChildItem env:azsqlaadm_aad_sqladmin_username).Value
         $global:aad_sqladmin_password = (Get-ChildItem env:azsqlaadm_aad_sqladmin_password).Value
         $global:sql_server_name = (Get-ChildItem env:azsqlaadm_sqlserver_name).Value
+
+        Info @"
+        loaded env variables:
+          -azsqlaadm_aad_sqladmin_username $aad_sqladmin_username
+          -azsqlaadm_sqlserver_name $sql_server_name
+"@
+
         #$global:sql_server_resourcegroup = (Get-ChildItem env:azsqlaadm_rg).Value
 
         # $aadADminPassword = ConvertTo-SecureString -AsPlainText -Force -String $aad_sqladmin_password 
@@ -54,25 +61,18 @@ Function SetupPrequisites() {
 }
 
 Function Info($msg) {
+    Write-Host $msg -fore blue
+}
+
+Function Success($msg) {
     Write-Host $msg -fore green
 }
+
 Function Error($msg, $source) {
 
-    $errMsg = ""
-    if ($Error.Count -ne "0") {
-        $errMsg = $Error[0]
-    }
+    Write-Host "($source): $msg - {$_}" -fore red
 
-    # foreach($e in $Error){
-    #     # ignore already exist error
-    #     if ($null -ne $e.Exception -And $e.Exception.Message -like "*already exists.*") {
-    #         return
-    #     }
-    # }
-
-    foreach($e in $Error){
-        Write-Host "($source): $msg - {$errMsg}" -fore red
-    }
+    
 }
 
 Function IsNullOrEmptyStr($str) {
@@ -431,29 +431,72 @@ Function Find_Server_Logins_By_DB_User_SID($sid) {
 
 #### process db contained users
 
-Function Get_DB_Users_Roles_Permissions($dbName) {
+Function Process_Remap_Database_Users_To_AAD_Identity() {
+
+    try {
+
+        $dbs = Get_Databases
+
+        foreach($row in $dbs.Rows) {
+            $dbName = $row[0]
+
+            $dbUsers = Get_DB_Users_Roles_Permissions_Without_Login_Mapping($dbName)
+
+            foreach($row in $dbUsers.Rows) {
+
+                $role = $row[0]
+                $userName = $row[1]
+                $permission = $row[2]
+
+                if($aad_sqladmin_username -ne $userName) {
+                    Drop_DB_Contained_User $dbName $userName
+
+                    Create_DB_Contained_User $dbName $userName
+                    
+                    Alter_Role_DB_User $dbname $role $userName
+
+                    Grant_DB_User_Permissions $dbname $permission $userName
+                }
+
+                
+            }
+        }
+    }
+    catch {
+        $errMsg = $Error[0]
+        Error "error when processing db users, $errMsg" "Process_Database_Users"
+    }
+}
+
+Function Get_DB_Users_Roles_Permissions_Without_Login_Mapping($dbName) {
     $userRPTSQL = @"
-    SELECT    
-	    roles.name                AS [Role]
-	,   members.name              AS UserPrincipalName
-	,   perms.permission_name     AS [Permissions]
-	,   members.type_desc         AS MemberType
-FROM sys.database_role_members AS database_role_members
-JOIN sys.database_principals AS roles  
-	ON database_role_members.role_principal_id = roles.principal_id  
-JOIN sys.database_principals AS members  
-	ON database_role_members.member_principal_id = members.principal_id
-LEFT JOIN (SELECT
-		class_desc
-		, CASE WHEN class = 0 THEN DB_NAME()
-			    WHEN class = 1 THEN OBJECT_NAME(major_id)
-			    WHEN class = 3 THEN SCHEMA_NAME(major_id) END [Securable]
-		, USER_NAME(grantee_principal_id) [AADUser]
-		, permission_name
-		, state_desc
-		FROM sys.database_permissions) perms
-	ON perms.[AADUser] = members.name
-WHERE members.type_desc like 'external%' and members.name not in ('dbo')
+    select 
+	sys.database_principals.name as [Role], 
+	members.name as name, 
+	--members.sid as sid, 
+	perms.permission_name as [permission]
+	--RIGHT(CONVERT(NVARCHAR(1000), members.sid, 2), 4) as AADExternalLogin
+    from sys.database_principals as members
+    left join sys.database_role_members AS database_role_members
+    on database_role_members.member_principal_id = members.principal_id
+    left join sys.database_principals
+    on sys.database_principals.principal_id = database_role_members.role_principal_id
+
+    LEFT JOIN (SELECT
+            class_desc
+            , CASE WHEN class = 0 THEN DB_NAME()
+                    WHEN class = 1 THEN OBJECT_NAME(major_id)
+                    WHEN class = 3 THEN SCHEMA_NAME(major_id) END [Securable]
+            , USER_NAME(grantee_principal_id) [AADUser]
+            , permission_name
+            , state_desc
+            FROM sys.database_permissions) perms
+        ON perms.[AADUser] = members.name
+
+    WHERE 
+        members.type_desc like 'external%'  and
+        members.name not in ('dbo') and
+        RIGHT(CONVERT(NVARCHAR(1000), members.sid, 2), 4) <> 'AADE'
 "@
 
     try {
@@ -477,7 +520,8 @@ WHERE members.type_desc like 'external%' and members.name not in ('dbo')
     }
 }
 
-Function Recreate_DB_User_As_External_Provider($dbname, $userName) {
+
+Function Create_DB_Contained_User($dbname, $userName) {
 
     try {
 
@@ -502,7 +546,7 @@ Function Recreate_DB_User_As_External_Provider($dbname, $userName) {
     }
     catch {
         $errMsg = $Error[0]
-        Error "error when re-creating db contained user as external provider (AAD), $errMsg" "Recreate_DB_User_As_External_Provider"
+        Error "error when re-creating db contained user as external provider (AAD), $errMsg" "Create_DB_Contained_User"
     }
 
 }
@@ -528,7 +572,7 @@ Function Alter_Role_DB_User($dbname, $role, $userName) {
     }
     catch {
         $errMsg = $Error[0]
-        Error "error when re-creating db contained user as exterbal provider (AAD), $errMsg" "Recreate_DB_User_As_External_Provider"
+        Error "error when re-creating db contained user as exterbal provider (AAD), $errMsg" "Alter_Role_DB_User"
     }
 }
 
@@ -552,58 +596,29 @@ Function Grant_DB_User_Permissions($dbname, $permission, $userName) {
         $conn.CLose()
     }
     catch {
-        Error "error when re-creating db contained user as exterbal provider (AAD)" "Recreate_DB_User_As_External_Provider"
+        Error "error when re-creating db contained user as exterbal provider (AAD)" "Grant_DB_User_Permissions"
     }
 }
 
-Function Process_Remap_Database_Users_To_AAD_Identity() {
 
-    try {
-
-        $dbs = Get_Databases
-
-        foreach($row in $dbs.Rows) {
-            $dbName = $row[0]
-
-            $dbUsers = Get_DB_Users_Roles_Permissions($dbName)
-
-            foreach($row in $dbUsers.Rows) {
-                $role = $row[0]
-                $userName = $row[1]
-                $permission = $row[2]
-                $userType = $row[3]
-
-                Recreate_DB_User_As_External_Provider $dbName $userName
-
-                Alter_Role_DB_User $dbname $role $userName
-
-                Grant_DB_User_Permissions $dbname $permission $userName
-            }
-        }
-    }
-    catch {
-        $errMsg = $Error[0]
-        Error "error when processing db users, $errMsg" "Process_Database_Users"
-    }
-}
 
 
 SetupPrequisites
 
 Test-SQLConnection "master" $aad_sqladmin_username $aad_sqladmin_password
 
-Info "Azure AD SQL Admin $aad_sqladmin_username is able to connect to DB server $sql_server_name"
-# Process_AAD_Server_Logins
+Success "Azure AD SQL Admin $aad_sqladmin_username is able to connect to DB server $sql_server_name"
 
-#Process_Remap_Database_Users_To_AAD_Identity
+Process_Remap_Database_Users_To_AAD_Identity
 
-Process_DB_Users_That_Maps_To_Server_Logins
+#Process_DB_Users_That_Maps_To_Server_Logins
 
-Info @"
+Success @"
 Completed
     -remapping of contained DB users to Server-Logins
     -recreate contained DB users as Azure AD users
 "@
+
 
 # Info "authenticated to AAD"
 
