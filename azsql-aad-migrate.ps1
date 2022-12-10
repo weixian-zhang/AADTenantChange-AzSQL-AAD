@@ -57,13 +57,26 @@ Function Info($msg) {
     Write-Host $msg -fore green
 }
 Function Error($msg, $source) {
-    foreach($e in $Error){
-        Write-Host "($source): $msg - {$e}" -fore red
+
+    $errMsg = ""
+    if ($Error.Count -ne "0") {
+        $errMsg = $Error[0]
     }
-    
+
+    # foreach($e in $Error){
+    #     # ignore already exist error
+    #     if ($null -ne $e.Exception -And $e.Exception.Message -like "*already exists.*") {
+    #         return
+    #     }
+    # }
+
+    foreach($e in $Error){
+        Write-Host "($source): $msg - {$errMsg}" -fore red
+    }
 }
 
 Function IsNullOrEmptyStr($str) {
+    
     if ( $null -eq $str -Or [string]::IsNullOrEmpty($str)) {
         return true
     }
@@ -94,10 +107,14 @@ Function Create_SQL_Connection($dbName, $userName, $passw) {
 
 Function Get_Databases() {
     try {
-        $dbTsql = "SELECT name FROM sys.databases"
-        $sqlConn.open()
 
-        $sqlCommand = $sqlConn.CreateCommand()
+        $conn = Create_SQL_Connection "master" $aad_sqladmin_username $aad_sqladmin_password
+
+        $dbTsql = "SELECT name FROM sys.databases"
+
+        $conn.open()
+
+        $sqlCommand = $conn.CreateCommand()
         $sqlCommand.CommandText = $dbTsql
 
         $dbNames = new-object System.Data.DataTable
@@ -106,7 +123,7 @@ Function Get_Databases() {
 
         $adapter.Fill($dbNames)
 
-        $sqlConn.Close()
+        $conn.Close()
 
         return ,$dbNames
     }
@@ -116,31 +133,190 @@ Function Get_Databases() {
     
 }
 
+Function DataTableHasRows($dt) {
+    if($null -ne $dt -And $dt.Rows.Count -gt 0) {
+        return $true
+    } else {
+        return $false
+    }
+}
+
 #### helpers ####
 
+
+#### process db users with server logins ####
+
+
+#already exists in the current database
+
+Function Process_DB_Users_That_Maps_To_Server_Logins() {
+
+    try {
+
+        #Recreate_Server_Logins
+        # https://www.dbtales.com/how-to-create-a-datatable-in-powershell/
+        $dbUsersWithLogins = new-object System.Data.DataTable
+        $dbUsersWithLogins.Columns.Add("database")
+        $dbUsersWithLogins.Columns.Add("username")
+        $dbUsersWithLogins.Columns.Add("sid")
+        $dbUsersWithLogins.Columns.Add("SIDWithoutAADE")
+        $dbUsersWithLogins.Columns.Add("AADExternalServerLogin")
+        $dbUsersWithLogins.Columns.Add("serverLoginName")
+        
+
+        $dbs = Get_Databases
+
+        foreach($row in $dbs.Rows) {
+
+            $dbName = $row[0]
+            
+            $dbUsersServerLogins = Get_DB_Users_With_Server_Logins $dbName
+
+            foreach($row in $dbUsersServerLogins.Rows) {
+
+                $username = $row[0]
+                $type_desc = $row[1]
+                $sid = $row[2]
+                $SIDWithoutAADE = $row[3]
+                $AADExternalLogin = $row[4]
+
+                $serverLoginDT = Find_Server_Logins_By_DB_User_SID $SIDWithoutAADE
+
+                # this db user does have mapping to a server login
+                if ($serverLoginDT.Count -ne "0") {
+                    
+                    foreach($row in $serverLoginDT.Rows) {
+                        $serverLoginName = $row[0]
+
+                        $newRow = $dbUsersWithLogins.NewRow()
+                        $newRow.database = $dbName
+                        $newRow.username = $username
+                        $newRow.sid = $sid
+                        $newRow.SIDWithoutAADE = $SIDWithoutAADE
+                        $newRow.AADExternalServerLogin = $AADExternalLogin
+                        $newRow.serverLoginName = $serverLoginName
+
+                        $dbUsersWithLogins.Rows.Add($newRow)
+                    }
+                }
+            }
+        }
+
+        foreach($row in $dbUsersWithLogins)
+        {
+            $database = $row[0]
+            $username = $row[1]
+            $sid = $row[2]
+            $SIDWithoutAADE = $row[3]
+            $AADExternalServerLogin = $row[4]
+            $serverLoginName = $row[5]
+
+            Drop_Server_Login $serverLoginName
+
+            Create_Server_Login $serverLoginName
+
+            Drop_DB_Contained_User $database $username
+
+            Create_DB_Users_FromServer_Login $database  $username $serverLoginName
+        }
+    }
+    catch {
+        Error "" "Process_DB_Users_That_Maps_To_Server_Logins"
+    }
+}
+
+Function Drop_Server_Login($loginName) {
+    
+
+    try {
+
+        $conn = Create_SQL_Connection "master" $aad_sqladmin_username $aad_sqladmin_password
+
+        $tsql = "DROP LOGIN [$loginName]"
+
+        $sqlCmd = new-object System.Data.SqlClient.SqlCommand($tsql, $conn);
+
+        $conn.open()
+
+        $sqlCmd.ExecuteNonQuery()
+
+        $conn.Close()
+    }
+    catch {
+        $conn.Close()
+        Error "error when creating server logins" "Create_Server_Login"
+    }
+}
 
 Function Create_Server_Login($username) {
 
     try {
+
+        $conn = Create_SQL_Connection "master" $aad_sqladmin_username $aad_sqladmin_password
+
         $tsql = "CREATE LOGIN [$username] FROM EXTERNAL PROVIDER"
 
-        $sqlCmd = new-object System.Data.SqlClient.SqlCommand($tsql, $sqlConn);
+        $sqlCmd = new-object System.Data.SqlClient.SqlCommand($tsql, $conn);
 
-        $sqlConn.open()
+        $conn.open()
 
         $sqlCmd.ExecuteNonQuery()
 
-        $sqlConn.Close()
+        $conn.Close()
     }
     catch {
+        $conn.Close()
         Error "error when creating server logins" "Create_Server_Login"
     }
     
 }
 
+Function Drop_DB_Contained_User($database, $username) {
+    
 
+    try {
 
-#### process db users with server logins ####
+        $conn = Create_SQL_Connection $database $aad_sqladmin_username $aad_sqladmin_password
+
+        $tsql = "DROP USER [$username]"
+
+        $sqlCmd = new-object System.Data.SqlClient.SqlCommand($tsql, $conn);
+
+        $conn.open()
+
+        $sqlCmd.ExecuteNonQuery()
+
+        $conn.Close()
+    }
+    catch {
+        $conn.Close()
+        Error "error when creating server logins" "Create_Server_Login"
+    }
+}
+
+Function Create_DB_Users_FromServer_Login($database, $username, $loginName) {
+
+    try {
+
+        $conn = Create_SQL_Connection $database $aad_sqladmin_username $aad_sqladmin_password
+
+        $tsql = "CREATE USER [$username] FROM LOGIN [$loginName]"
+
+        $sqlCmd = new-object System.Data.SqlClient.SqlCommand($tsql, $conn);
+
+        $conn.open()
+
+        $sqlCmd.ExecuteNonQuery()
+
+        $conn.Close()
+    }
+    catch {
+        $conn.Close()
+        Error "error when creating server logins" "Create_Server_Login"
+    }
+    
+}
+
 
 Function Get_Server_Logins() {
     $tsql = @"
@@ -170,55 +346,34 @@ Function Recreate_Server_Logins() {
 
     $serverLogins = Get_Server_Logins
 
-    foreach($row in $serverLogins) {
+    foreach($row in $serverLogins.Rows) {
 
-        # create server logins
+        $name = $row[0]
 
-    }
+        Drop_Server_Login $name
+        
+        # recreate server logins
+        Create_Server_Login $name
 
-}
-
-Function Process_DB_Users_That_Maps_To_Server_Logins() {
-
-    Recreate_Server_Logins
-
-    try {
-
-        $dbs = Get_Databases
-
-        foreach($row in $dbs.Rows) {
-            $dbName = $row[0]
-            
-            $dbUsersServerLogins = Get_DB_Users_With_Server_Logins $dbName
-
-            foreach($row in $dbUsersServerLogins) {
-
-                $name = $row[0]
-                $type_desc = $row[1]
-                $sid = $row[2]
-                $SIDWithoutAADE = $row[3]
-                $AADExternalLogin = $row[4]
-
-                $ Find_Server_Logins_By_DB_User_SID $SIDWithoutAADE
-
-            }
-        }
-    }
-    catch {
-        Error "" "Process_DB_Users_That_Maps_To_Server_Logins"
     }
 }
 
-Function Find_Server_Logins_By_DB_User_SID($sid) {
-
+Function Get_DB_Users_With_Server_Logins($dbName) {
     $tsql = @"
-    select name, sid, type_desc from sys.server_principals
-    WHERE type_desc like 'external%' and sid = $sid
+    SELECT * FROM
+    (
+        SELECT name, type_desc, sid, 
+        LEFT(CONVERT(NVARCHAR(1000), sid, 2), LEN(CONVERT(NVARCHAR(1000), sid, 2))- 4 ) as SIDWithoutAADE, 
+        RIGHT(CONVERT(NVARCHAR(1000), sid, 2), 4) as AADExternalServerLogin
+        FROM sys.database_principals 
+        WHERE type_desc like 'external%'
+    ) t
+    WHERE t.AADExternalServerLogin = 'AADE'
 "@
 
     try {
 
-        $conn = Create_SQL_Connection "master" $aad_sqladmin_username $aad_sqladmin_password
+        $conn = Create_SQL_Connection $dbName $aad_sqladmin_username $aad_sqladmin_password
 
         $sqlCommand = $conn.CreateCommand()
         $sqlCommand.CommandText = $tsql
@@ -238,22 +393,19 @@ Function Find_Server_Logins_By_DB_User_SID($sid) {
     }
 }
 
-Function Get_DB_Users_With_Server_Logins($dbName) {
+Function Find_Server_Logins_By_DB_User_SID($sid) {
+
     $tsql = @"
-    SELECT * FROM
-    (
-        SELECT name, type_desc, sid, 
-        LEFT(CONVERT(NVARCHAR(1000), sid, 2), LEN(CONVERT(NVARCHAR(1000), sid, 2))- 4 ) as SIDWithoutAADE, 
-        RIGHT(CONVERT(NVARCHAR(1000), sid, 2), 4) as AADExternalLogin
-        FROM sys.database_principals 
-        WHERE type_desc like 'external%'
-    ) t
-    WHERE t.AADExternalLogin = 'AADE'
+    select * from
+    (select name, CONVERT(NVARCHAR(1000), sid, 2) as sid, type_desc
+    from sys.server_principals
+    WHERE type_desc like 'external%') as t
+    where t.sid = '$sid'
 "@
 
     try {
 
-        $conn = Create_SQL_Connection $dbName $aad_sqladmin_username $aad_sqladmin_password
+        $conn = Create_SQL_Connection "master" $aad_sqladmin_username $aad_sqladmin_password
 
         $sqlCommand = $conn.CreateCommand()
         $sqlCommand.CommandText = $tsql
@@ -266,6 +418,7 @@ Function Get_DB_Users_With_Server_Logins($dbName) {
 
         $conn.Close()
         
+        # only 1 record always
         return ,$datatable
     }
     catch {
