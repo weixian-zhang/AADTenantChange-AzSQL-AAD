@@ -2,12 +2,44 @@
 
 Function SetupPrequisites() {
 
-
     try {
+
+        
+        
+        $global:appinsights = ""
         
         $global:aad_sqladmin_username = (Get-ChildItem env:azsqlaadm_aad_sqladmin_username).Value
         $global:aad_sqladmin_password = (Get-ChildItem env:azsqlaadm_aad_sqladmin_password).Value
         $global:sql_server_name = (Get-ChildItem env:azsqlaadm_sqlserver_name).Value
+
+        try {
+
+            $aad_appinsights_key = (Get-ChildItem env:azsqlaadm_appinsights_key).Value
+
+            if ($null -ne $aad_appinsights_key) {
+
+                Info "AppInsights key detected in env var 'azsqlaadm_appinsights_key' "
+
+                Info "locating .\Microsoft.ApplicationInsights.dll, in same directory as this script"
+
+                Add-Type -Path ".\Microsoft.ApplicationInsights.dll"  
+
+                Info "Microsoft.ApplicationInsights.dll added"
+
+                $global:appinsights = [Microsoft.ApplicationInsights.TelemetryClient]::new()
+                $global:appinsights.InstrumentationKey = $aad_appinsights_key
+                $global:appinsights.Context.User.Id = $global:aad_sqladmin_username
+
+                Info "Initialized App Insights client with key $aad_appinsights_key"
+
+            } else{
+                Warn "App Insights instrumentation key not found in env vars, skipping App Insights module and continue processing"
+            }
+        }
+        catch {
+            Error "" "SetupPrequisites"
+        }
+        
 
         Info @"
         loaded env variables:
@@ -17,7 +49,7 @@ Function SetupPrequisites() {
 
     }
     catch {
-        Error "error at setting up prerequisites" "SetupPrequisites"
+        Error "error when setting up prerequisites" "SetupPrequisites"
         exit
     }
 }
@@ -40,7 +72,14 @@ Function Success($msg) {
 
 Function Error($msg, $source) {
     $now = NowStr
-    Write-Host "[$now]: ($source): $msg - {$_}" -fore red    
+    $errMsg = "[$now]: ($source): $msg - {$_}"
+    Write-Host $errMsg -fore red  
+    
+    if ($appinsights -ne "") {
+        # $telemtryException = New-Object "Microsoft.ApplicationInsights.DataContracts.ExceptionTelemetry"  
+        # $telemtryException.Exception = $_.Exception  
+        $appinsights.TrackException($errMsg)
+    }
 }
 
 Function NowStr() {
