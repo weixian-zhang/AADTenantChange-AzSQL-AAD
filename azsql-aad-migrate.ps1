@@ -1,26 +1,3 @@
-# https://learn.microsoft.com/en-us/azure/azure-sql/database/authentication-aad-configure?view=azuresql&tabs=azure-powershell
-
-
-# this script is using SPN in TechPass to perform "Set admin" at Azure SQL server-level
-
-# try
-# {
-#     # mandatory env variables need to be set
-#     #$techpass_SPNAppId = (Get-ChildItem env:azsqlaadm_SPNAppId).Value
-    
-#     #$techpass_spn_secret = (Get-ChildItem env:azsqlaadm_spn_secret).Value
-    
-#     #$techpass_sqladmin_objectid = (Get-ChildItem env:azsqlaadm_techpass_sqladmin_objectid).Value
-    
-# }
-# catch
-# {
-#     Error("Something threw an exception")
-  
-# }
-
-
-
 #### helpers ####
 
 Function SetupPrequisites() {
@@ -214,8 +191,6 @@ Function Process_Server_Logins_and_Mapped_DB_Users() {
 
         Info "being recreating server-logins and DB users that mapped to server-logins"
 
-        #Recreate_Server_Logins
-        # https://www.dbtales.com/how-to-create-a-datatable-in-powershell/
         $dbUsersWithLogins = new-object System.Data.DataTable
         $dbUsersWithLogins.Columns.Add("database")
         $dbUsersWithLogins.Columns.Add("username")
@@ -775,6 +750,27 @@ Completed
 
 
 ### setup prerequisites ###
+
+# https://learn.microsoft.com/en-us/azure/azure-sql/database/authentication-aad-configure?view=azuresql&tabs=azure-powershell
+
+# this script is using SPN in TechPass to perform "Set admin" at Azure SQL server-level
+
+# try
+# {
+#     # mandatory env variables need to be set
+#     #$techpass_SPNAppId = (Get-ChildItem env:azsqlaadm_SPNAppId).Value
+    
+#     #$techpass_spn_secret = (Get-ChildItem env:azsqlaadm_spn_secret).Value
+    
+#     #$techpass_sqladmin_objectid = (Get-ChildItem env:azsqlaadm_techpass_sqladmin_objectid).Value
+    
+# }
+# catch
+# {
+#     Error("Something threw an exception")
+  
+# }
+
 
 #$global:techpass_techpass_tenant_id = (Get-ChildItem env:azsqlaadm_techpass_tenant_id).Value
 #$global:sql_server_resourcegroup = (Get-ChildItem env:azsqlaadm_rg).Value
