@@ -141,6 +141,80 @@ Function DataTableHasRows($dt) {
     }
 }
 
+Function Is_Server_Login_Exists($loginName) {
+    
+
+    try {
+
+        $conn = Create_SQL_Connection 'master' $aad_sqladmin_username $aad_sqladmin_password
+
+        $tsql = @"
+        IF EXISTS (SELECT [name]
+                FROM sys.server_principals
+                WHERE 
+					[name] = N'$loginName' and
+					type_desc like 'external%')
+        Begin
+            select 1
+        end
+        ELSE
+        BEGIN
+            SELECT 0
+        END
+"@
+
+        $sqlCmd = new-object System.Data.SqlClient.SqlCommand($tsql, $conn);
+
+        $conn.open()
+
+        $r = $sqlCmd.ExecuteScalar()
+
+        $conn.Close()
+
+        return $r
+    }
+    catch {
+        Error "error when checking if server-login exists" "Is_Server_Login_Exists"
+    }
+}
+
+Function Is_DB_User_Exist($database, $username) {
+    
+
+    try {
+
+        $conn = Create_SQL_Connection $database $aad_sqladmin_username $aad_sqladmin_password
+
+        $tsql = @"
+        IF EXISTS (SELECT [name]
+                FROM [sys].[database_principals]
+                WHERE 
+					[name] = N'$username' and
+					type_desc like 'external%')
+        Begin
+            select 1
+        end
+        ELSE
+        BEGIN
+            SELECT 0
+        END
+"@
+
+        $sqlCmd = new-object System.Data.SqlClient.SqlCommand($tsql, $conn);
+
+        $conn.open()
+
+        $r = $sqlCmd.ExecuteScalar()
+
+        $conn.Close()
+
+        return $r
+    }
+    catch {
+        Error "error when checking if db user exists" "Is_DB_User_Exist"
+    }
+}
+
 #### helpers ####
 
 
@@ -149,51 +223,55 @@ Function DataTableHasRows($dt) {
 
 #already exists in the current database
 
-Function Process_DB_Users_That_Maps_To_Server_Logins() {
+Function Process_Server_Logins_and_Mapped_DB_Users() {
 
     try {
+
+        Info "being recreating server-logins and DB users that mapped to server-logins"
 
         #Recreate_Server_Logins
         # https://www.dbtales.com/how-to-create-a-datatable-in-powershell/
         $dbUsersWithLogins = new-object System.Data.DataTable
         $dbUsersWithLogins.Columns.Add("database")
         $dbUsersWithLogins.Columns.Add("username")
+        $dbUsersWithLogins.Columns.Add("role")
+        $dbUsersWithLogins.Columns.Add("permission")
         $dbUsersWithLogins.Columns.Add("sid")
         $dbUsersWithLogins.Columns.Add("SIDWithoutAADE")
-        $dbUsersWithLogins.Columns.Add("AADExternalServerLogin")
         $dbUsersWithLogins.Columns.Add("serverLoginName")
         
-
         $dbs = Get_Databases
 
         foreach($row in $dbs.Rows) {
 
             $dbName = $row[0]
             
-            $dbUsersServerLogins = Get_DB_Users_With_Server_Logins $dbName
+            $dbUsersServerLogins = Get_DB_Users_Roles_Permissions_With_Server_Logins $dbName
 
             foreach($row in $dbUsersServerLogins.Rows) {
 
-                $username = $row[0]
-                $type_desc = $row[1]
-                $sid = $row[2]
-                $SIDWithoutAADE = $row[3]
-                $AADExternalLogin = $row[4]
+                $role = $row[0]
+                $username = $row[1]
+                $permission = $row[2]
+                $sid = $row[3]
+                $sidWithoutAADE = $row[4]
 
-                $serverLoginDT = Find_Server_Logins_By_DB_User_SID $SIDWithoutAADE
+                $serverLoginDT = Find_Server_Logins_By_DB_User_SID $sidWithoutAADE
 
                 # this db user does have mapping to a server login
                 if ($serverLoginDT.Count -ne "0") {
                     
                     foreach($row in $serverLoginDT.Rows) {
+
                         $serverLoginName = $row[0]
 
                         $newRow = $dbUsersWithLogins.NewRow()
                         $newRow.database = $dbName
                         $newRow.username = $username
+                        $newRow.role = $role
+                        $newRow.permission = $permission
                         $newRow.sid = $sid
                         $newRow.SIDWithoutAADE = $SIDWithoutAADE
-                        $newRow.AADExternalServerLogin = $AADExternalLogin
                         $newRow.serverLoginName = $serverLoginName
 
                         $dbUsersWithLogins.Rows.Add($newRow)
@@ -206,22 +284,51 @@ Function Process_DB_Users_That_Maps_To_Server_Logins() {
         {
             $database = $row[0]
             $username = $row[1]
-            $sid = $row[2]
-            $SIDWithoutAADE = $row[3]
-            $AADExternalServerLogin = $row[4]
-            $serverLoginName = $row[5]
+            $role = $row[2]
+            $permission = $row[3]
+            $sid = $row[4]
+            $SIDWithoutAADE = $row[5]
+            $serverLoginName = $row[6]
 
-            Drop_Server_Login $serverLoginName
+            if (Is_Server_Login_Exists $serverLoginName) {
 
-            Create_Server_Login $serverLoginName
+                Drop_Server_Login $serverLoginName
 
-            Drop_DB_Contained_User $database $username
+                Create_Server_Login $serverLoginName
 
-            Create_DB_Users_FromServer_Login $database  $username $serverLoginName
+                if (Is_DB_User_Exist $database $username) {
+
+                        Info "DB user $userName exists in database $dbName, begin re-creating user and adding appropriate roles and permissions to users"
+
+                    Drop_DB_Contained_User $database $username
+
+                        Info "DB user $userName dropped in database $dbName"
+
+                    Create_DB_Users_FromServer_Login $database  $username $serverLoginName
+
+                        Info "DB user $userName created in database $dbName"
+
+                    if($role -ne "") {
+                            Info "Roles {$role} detected for DB user $userName database $dbName, adding role to user" 
+
+                        Alter_Role_DB_User $dbname $role $userName
+                    }else {
+                        Info "No roles detected for DB user in $userName database $dbName"
+                    }
+                    
+                    if($permission -ne "") {
+                            Info "Permission {$permission} detected for DB user $userName  database $dbName, adding permission to user" 
+
+                        Grant_DB_User_Permissions $dbname $permission $userName
+                    }else {
+                        Info "No permission detected for DB user $userName database $dbName"
+                    }
+                }
+            }            
         }
     }
     catch {
-        Error "" "Process_DB_Users_That_Maps_To_Server_Logins"
+        Error "" "Process_Server_Logins_and_Mapped_DB_Users"
     }
 }
 
@@ -271,6 +378,8 @@ Function Create_Server_Login($username) {
     
 }
 
+
+
 Function Drop_DB_Contained_User($database, $username) {
     
 
@@ -314,7 +423,6 @@ Function Create_DB_Users_FromServer_Login($database, $username, $loginName) {
         $conn.Close()
         Error "error when creating server logins" "Create_Server_Login"
     }
-    
 }
 
 
@@ -358,17 +466,49 @@ Function Recreate_Server_Logins() {
     }
 }
 
-Function Get_DB_Users_With_Server_Logins($dbName) {
+# TODO
+Function Get_DB_Users_Roles_Permissions_With_Server_Logins($dbName) {
+#     $tsql = @"
+#     SELECT * FROM
+#     (
+#         SELECT name, type_desc, sid, 
+#         LEFT(CONVERT(NVARCHAR(1000), sid, 2), LEN(CONVERT(NVARCHAR(1000), sid, 2))- 4 ) as SIDWithoutAADE, 
+#         RIGHT(CONVERT(NVARCHAR(1000), sid, 2), 4) as AADExternalServerLogin
+#         FROM sys.database_principals 
+#         WHERE type_desc like 'external%'
+#     ) t
+#     WHERE t.AADExternalServerLogin = 'AADE'
+# "@
+
     $tsql = @"
-    SELECT * FROM
-    (
-        SELECT name, type_desc, sid, 
-        LEFT(CONVERT(NVARCHAR(1000), sid, 2), LEN(CONVERT(NVARCHAR(1000), sid, 2))- 4 ) as SIDWithoutAADE, 
-        RIGHT(CONVERT(NVARCHAR(1000), sid, 2), 4) as AADExternalServerLogin
-        FROM sys.database_principals 
-        WHERE type_desc like 'external%'
-    ) t
-    WHERE t.AADExternalServerLogin = 'AADE'
+    select 
+        coalesce(sys.database_principals.name, '') as [Role], 
+        members.name as name, 
+        coalesce(perms.permission_name, '') as [permission],
+        CONVERT(NVARCHAR(1000), members.sid, 2) as [SID],
+        LEFT(CONVERT(NVARCHAR(1000), members.sid, 2), LEN(CONVERT(NVARCHAR(1000), members.sid, 2))- 4 ) as SIDWithoutAADE
+
+        from sys.database_principals as members
+        left join sys.database_role_members AS database_role_members
+        on database_role_members.member_principal_id = members.principal_id
+        left join sys.database_principals
+        on sys.database_principals.principal_id = database_role_members.role_principal_id
+
+        LEFT JOIN (SELECT
+                class_desc
+                , CASE WHEN class = 0 THEN DB_NAME()
+                        WHEN class = 1 THEN OBJECT_NAME(major_id)
+                        WHEN class = 3 THEN SCHEMA_NAME(major_id) END [Securable]
+                , USER_NAME(grantee_principal_id) [AADUser]
+                , permission_name
+                , state_desc
+                FROM sys.database_permissions) perms
+            ON perms.[AADUser] = members.name
+
+        WHERE 
+            members.type_desc like 'external%'  and
+            members.name not in ('dbo') and
+            RIGHT(CONVERT(NVARCHAR(1000), members.sid, 2), 4) = 'AADE'
 "@
 
     try {
@@ -389,7 +529,7 @@ Function Get_DB_Users_With_Server_Logins($dbName) {
         return ,$datatable
     }
     catch {
-        Error "error when getting databases" "Get_Databases"
+        Error "" "Get_DB_Users_Roles_Permissions_With_Server_Logins"
     }
 }
 
@@ -431,7 +571,7 @@ Function Find_Server_Logins_By_DB_User_SID($sid) {
 
 #### process db contained users
 
-Function Process_Remap_Database_Users_To_AAD_Identity() {
+Function Process_Database_Contained_Users() {
 
     try {
 
@@ -440,7 +580,7 @@ Function Process_Remap_Database_Users_To_AAD_Identity() {
         foreach($row in $dbs.Rows) {
             $dbName = $row[0]
 
-            $dbUsers = Get_DB_Users_Roles_Permissions_Without_Login_Mapping($dbName)
+            $dbUsers = Get_DB_Users_Roles_Permissions_Without_Server_Login($dbName)
 
             foreach($row in $dbUsers.Rows) {
 
@@ -449,33 +589,53 @@ Function Process_Remap_Database_Users_To_AAD_Identity() {
                 $permission = $row[2]
 
                 if($aad_sqladmin_username -ne $userName) {
-                    Drop_DB_Contained_User $dbName $userName
 
-                    Create_DB_Contained_User $dbName $userName
-                    
-                    Alter_Role_DB_User $dbname $role $userName
+                    $exists = Is_DB_User_Exist $dbName $userName
 
-                    Grant_DB_User_Permissions $dbname $permission $userName
+                    if($exists -eq 1) {
+
+                        Info "DB user $userName exists in database $dbName, begin re-creating user and adding appropriate roles and permissions to users"
+
+                        Drop_DB_Contained_User $dbName $userName
+
+                        Info "DB user $userName dropped in database $dbName"
+
+                        Create_DB_Contained_User $dbName $userName
+
+                        Info "DB user $userName created in database $dbName"
+                        
+                        if($role -ne "") {
+                            Info "Roles {$role} detected for DB user $userName database $dbName, adding role to user" 
+
+                            Alter_Role_DB_User $dbname $role $userName
+                        }else {
+                            Info "No roles detected for DB user in $userName database $dbName"
+                        }
+                        
+                        if($permission -ne "") {
+                            Info "Permission {$permission} detected for DB user $userName  database $dbName, adding permission to user" 
+
+                            Grant_DB_User_Permissions $dbname $permission $userName
+                        }else {
+                            Info "No permission detected for DB user $userName database $dbName"
+                        }
+                    }
                 }
-
-                
             }
         }
     }
     catch {
-        $errMsg = $Error[0]
-        Error "error when processing db users, $errMsg" "Process_Database_Users"
+        Error "error when processing db $userName, $errMsg in database $dbName" "Process_Database_Users"
     }
 }
 
-Function Get_DB_Users_Roles_Permissions_Without_Login_Mapping($dbName) {
+Function Get_DB_Users_Roles_Permissions_Without_Server_Login($dbName) {
     $userRPTSQL = @"
     select 
-	sys.database_principals.name as [Role], 
+	coalesce(sys.database_principals.name, '') as [Role], 
 	members.name as name, 
-	--members.sid as sid, 
-	perms.permission_name as [permission]
-	--RIGHT(CONVERT(NVARCHAR(1000), members.sid, 2), 4) as AADExternalLogin
+	coalesce(perms.permission_name, '') as [permission]
+
     from sys.database_principals as members
     left join sys.database_role_members AS database_role_members
     on database_role_members.member_principal_id = members.principal_id
@@ -596,7 +756,7 @@ Function Grant_DB_User_Permissions($dbname, $permission, $userName) {
         $conn.CLose()
     }
     catch {
-        Error "error when re-creating db contained user as exterbal provider (AAD)" "Grant_DB_User_Permissions"
+        Error "error when granting permission to $userName at database [$dbname]" "Grant_DB_User_Permissions"
     }
 }
 
@@ -609,15 +769,23 @@ Test-SQLConnection "master" $aad_sqladmin_username $aad_sqladmin_password
 
 Success "Azure AD SQL Admin $aad_sqladmin_username is able to connect to DB server $sql_server_name"
 
-Process_Remap_Database_Users_To_AAD_Identity
+Process_Database_Contained_Users
 
-#Process_DB_Users_That_Maps_To_Server_Logins
+Process_Server_Logins_and_Mapped_DB_Users
 
 Success @"
 Completed
     -remapping of contained DB users to Server-Logins
     -recreate contained DB users as Azure AD users
 "@
+
+
+
+
+
+
+
+
 
 
 # Info "authenticated to AAD"
