@@ -219,6 +219,8 @@ Function Process_Server_Logins_and_Mapped_DB_Users() {
         foreach($row in $dbs.Rows) {
 
             $dbName = $row[0]
+
+            Info "at database {$dbName}"
             
             $dbUsersServerLogins = Get_DB_Users_Roles_Permissions_With_Server_Logins $dbName
 
@@ -247,7 +249,7 @@ Function Process_Server_Logins_and_Mapped_DB_Users() {
 
                         $serverLoginName = $row[0]
 
-                        Info "DB user with SID {$sidWithoutAADE} found matching server login {$serverLoginName}"
+                        Info "DB user {$username} with SID {$sidWithoutAADE} found matching server login {$serverLoginName}"
 
                         $newRow = $dbUsersWithLogins.NewRow()
                         $newRow.database = $dbName
@@ -275,7 +277,7 @@ Function Process_Server_Logins_and_Mapped_DB_Users() {
             $serverLoginName = $row[6]
 
             Info @"
-            being recreate server logins and remapping DB users with info:
+            begin recreate server logins and remapping DB users with info:
                 database: $database
                 DB username: $username
                 DB user role: $role
@@ -564,7 +566,7 @@ Function Process_Database_Contained_Users() {
 
     try {
 
-        Info "being recreating db contained users"
+        Info "begin recreating db contained users"
 
         Info "retrieving databases"
 
@@ -573,11 +575,16 @@ Function Process_Database_Contained_Users() {
         Info "retrieve databases complete"
 
         foreach($row in $dbs.Rows) {
+
             $dbName = $row[0]
+
+            Info "at database {$dbName}"
 
             Info "retrieving db contained user users, roles and permissions 'with no match server-logins' "
 
             $dbUsers = Get_DB_Users_Roles_Permissions_Without_Server_Login($dbName)
+
+            Info "Completed retrieval of db contained user users, roles and permissions 'with no match server-logins' "
 
             foreach($row in $dbUsers.Rows) {
 
