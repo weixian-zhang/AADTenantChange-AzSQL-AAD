@@ -28,8 +28,6 @@ Function SetupPrequisites() {
 
     try {
         
-
-        #$global:techpass_techpass_tenant_id = (Get-ChildItem env:azsqlaadm_techpass_tenant_id).Value
         $global:aad_sqladmin_username = (Get-ChildItem env:azsqlaadm_aad_sqladmin_username).Value
         $global:aad_sqladmin_password = (Get-ChildItem env:azsqlaadm_aad_sqladmin_password).Value
         $global:sql_server_name = (Get-ChildItem env:azsqlaadm_sqlserver_name).Value
@@ -40,19 +38,6 @@ Function SetupPrequisites() {
           -azsqlaadm_sqlserver_name $sql_server_name
 "@
 
-        #$global:sql_server_resourcegroup = (Get-ChildItem env:azsqlaadm_rg).Value
-
-        # $aadADminPassword = ConvertTo-SecureString -AsPlainText -Force -String $aad_sqladmin_password 
-        # $azcred = New-Object System.Management.Automation.PSCredential $aad_sqladmin_username, $aadADminPassword
-
-        # login to Azure techpass tenant
-        # Info "authenticating to AAD"
-        # Connect-AzAccount -Credential $azcred -Tenant $techpass_techpass_tenant_id
-        # $global:accesstoken = Get-AzAccessToken
-
-        #$global:sqlConn = new-object System.Data.SqlClient.SqlConnection("Data Source=$sql_server_name; Authentication=Active Directory Password; Initial Catalog=master;  UID=$aad_sqladmin_username; PWD=$aad_sqladmin_password")
-        #$global:sqlConn.AccessToken = $accesstoken.Token
-    
     }
     catch {
         Error "error at setting up prerequisites" "SetupPrequisites"
@@ -255,6 +240,12 @@ Function Process_Server_Logins_and_Mapped_DB_Users() {
                 $permission = $row[2]
                 $sid = $row[3]
                 $sidWithoutAADE = $row[4]
+
+                # important! - user to delete cannot be AAD SQL Admin when supporting recreating of users in Master db where
+                # AAD SQL Admin also located in Master db
+                if($aad_sqladmin_username -eq $userName) {
+                    return      # return continue foreach loop
+                }
 
                 $serverLoginDT = Find_Server_Logins_By_DB_User_SID $sidWithoutAADE
 
@@ -587,7 +578,9 @@ Function Process_Database_Contained_Users() {
                 $role = $row[0]
                 $userName = $row[1]
                 $permission = $row[2]
-
+                
+                # important! - user to delete cannot be AAD SQL Admin when supporting recreating of users in Master db where
+                # AAD SQL Admin also located in Master db
                 if($aad_sqladmin_username -ne $userName) {
 
                     $exists = Is_DB_User_Exist $dbName $userName
@@ -761,8 +754,6 @@ Function Grant_DB_User_Permissions($dbname, $permission, $userName) {
 }
 
 
-
-
 SetupPrequisites
 
 Test-SQLConnection "master" $aad_sqladmin_username $aad_sqladmin_password
@@ -783,12 +774,27 @@ Completed
 
 
 
+### setup prerequisites ###
+
+#$global:techpass_techpass_tenant_id = (Get-ChildItem env:azsqlaadm_techpass_tenant_id).Value
+#$global:sql_server_resourcegroup = (Get-ChildItem env:azsqlaadm_rg).Value
+
+# $aadADminPassword = ConvertTo-SecureString -AsPlainText -Force -String $aad_sqladmin_password 
+# $azcred = New-Object System.Management.Automation.PSCredential $aad_sqladmin_username, $aadADminPassword
+
+# login to Azure techpass tenant
+# Info "authenticating to AAD"
+# Connect-AzAccount -Credential $azcred -Tenant $techpass_techpass_tenant_id
+# $global:accesstoken = Get-AzAccessToken
+
+#$global:sqlConn = new-object System.Data.SqlClient.SqlConnection("Data Source=$sql_server_name; Authentication=Active Directory Password; Initial Catalog=master;  UID=$aad_sqladmin_username; PWD=$aad_sqladmin_password")
+#$global:sqlConn.AccessToken = $accesstoken.Token
+
+### setup prerequisites ###
 
 
 
-
-
-# Info "authenticated to AAD"
+### set AAD SQL admin in powershell, not in used now ###
 
 # Set-AzSqlServerActiveDirectoryAdministrator -ResourceGroupName $sql_server_resourcegroup `
 # -ServerName $sql_server_name `
@@ -800,11 +806,5 @@ Completed
 # $sqlConnection.AccessToken = $accesstoken.Token
 # $sqlConnection.open()
 
+### set AAD SQL admin in powershell, not in used now ###
 
-
-
-# migrate for server-level logins
-# remap user to login
-#https://www.aip.im/2010/05/re-map-database-user-to-login-in-sql-server-after-restoring-or-attaching-database/#sthash.fbazv94Z.dpuf
-
-# migrate for db users
