@@ -1,2 +1,3 @@
-# AADTenantChange-AzSQL-AAD
-A PosH script to automate the migration of server-level logins and db-level users, in an Azure subscription AAD tenant change situation
+# Azure AD Tenant Change - Azure SQL Azure AD Enabled  
+
+A PosH script to automate the restoration of Azure SQL and Azure SQL Managed Instance - Azure AD enabled sign-in, with Server Logins and Contained Database users, in an Azure subscription tenant change or SQL Server restoration situation
